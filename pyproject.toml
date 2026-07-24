@@ -30,7 +30,7 @@ dependencies = [
     "pydantic>=2.5.0",
     "pyyaml>=6.0.1",
     "requests>=2.31.0",
-    "pyarr>=5.2.0"
+    "pyarr>=5.2.0,<6"
 ]
 
 [project.optional-dependencies]
