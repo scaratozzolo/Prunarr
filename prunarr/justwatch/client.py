@@ -12,7 +12,12 @@ from prunarr.justwatch.exceptions import (
     JustWatchRateLimitError,
 )
 from prunarr.justwatch.models import AvailabilityResult, Offer, Provider, SearchResult
-from prunarr.justwatch.queries import OFFERS_QUERY, PROVIDERS_QUERY, SEARCH_QUERY
+from prunarr.justwatch.queries import (
+    OFFERS_NODES_QUERY,
+    OFFERS_QUERY,
+    PROVIDERS_QUERY,
+    SEARCH_QUERY,
+)
 from prunarr.logger import PrunArrLogger
 
 
@@ -21,6 +26,11 @@ class JustWatchClient:
 
     GRAPHQL_URL = "https://apis.justwatch.com/graphql"
     DEFAULT_TIMEOUT = 10
+
+    # How many titles to bundle into a single batched GraphQL request. Verified
+    # against the live endpoint; kept conservative to stay under complexity caps.
+    SEARCH_BATCH_SIZE = 25
+    OFFERS_BATCH_SIZE = 10
 
     def __init__(
         self,
@@ -279,6 +289,121 @@ class JustWatchClient:
                 self.logger.debug(f"Cached JustWatch offers for: {justwatch_id}")
 
         return offers
+
+    def _build_search_batch_query(self, chunk: List[tuple], content_type: str) -> tuple:
+        """Build an aliased GraphQL query that searches many titles at once."""
+        var_defs = ["$country: Country!", "$language: Language!"]
+        fields = []
+        variables: Dict[str, Any] = {"country": self.country, "language": self.language}
+
+        for i, (title, year) in enumerate(chunk):
+            var_defs.append(f"$f{i}: TitleFilter!")
+            fields.append(
+                f"  t{i}: popularTitles(country: $country, filter: $f{i}, first: 1, sortBy: POPULAR) "
+                f"{{ edges {{ node {{ id objectType objectId "
+                f"content(country: $country, language: $language) "
+                f"{{ title originalReleaseYear externalIds {{ imdbId tmdbId }} }} }} }} }}"
+            )
+            title_filter: Dict[str, Any] = {"searchQuery": title, "objectTypes": [content_type]}
+            if year:
+                title_filter["releaseYear"] = {"min": year, "max": year}
+            variables[f"f{i}"] = title_filter
+
+        query = "query BatchSearch(" + ", ".join(var_defs) + ") {\n" + "\n".join(fields) + "\n}"
+        return query, variables
+
+    def search_titles_batch(
+        self, queries: List[tuple], content_type: str = "MOVIE"
+    ) -> List[Optional[SearchResult]]:
+        """
+        Search for many titles in one request each using GraphQL aliases.
+
+        Args:
+            queries: List of (title, release_year) tuples.
+            content_type: Type of content (MOVIE or SHOW).
+
+        Returns:
+            List of SearchResult (or None where nothing matched), aligned 1:1
+            with ``queries``.
+        """
+        results: List[Optional[SearchResult]] = [None] * len(queries)
+
+        for start in range(0, len(queries), self.SEARCH_BATCH_SIZE):
+            chunk = queries[start : start + self.SEARCH_BATCH_SIZE]
+            query, variables = self._build_search_batch_query(chunk, content_type)
+            data = self._make_request(query, variables)
+
+            for i in range(len(chunk)):
+                edges = (data.get(f"t{i}") or {}).get("edges") or []
+                if not edges:
+                    continue
+                node = edges[0].get("node", {})
+                content = node.get("content", {})
+                external_ids = content.get("externalIds", {})
+                results[start + i] = SearchResult(
+                    id=node.get("id", ""),
+                    object_type=node.get("objectType", content_type),
+                    title=content.get("title", ""),
+                    release_year=content.get("originalReleaseYear"),
+                    imdb_id=external_ids.get("imdbId"),
+                    tmdb_id=external_ids.get("tmdbId"),
+                )
+
+        return results
+
+    def get_offers_batch(
+        self, ids: List[str], providers: Optional[List[str]] = None
+    ) -> Dict[str, List[Offer]]:
+        """
+        Get streaming offers for many titles in one request via ``nodes(ids:)``.
+
+        Mirrors :meth:`get_offers` filtering (FLATRATE offers on the given
+        providers) but resolves a whole batch of JustWatch ids per request.
+
+        Args:
+            ids: JustWatch content node ids.
+            providers: Optional provider technical names to filter by.
+
+        Returns:
+            Mapping of JustWatch id -> list of matching FLATRATE offers.
+        """
+        offers_by_id: Dict[str, List[Offer]] = {}
+        unique_ids = list(dict.fromkeys(i for i in ids if i))
+
+        for start in range(0, len(unique_ids), self.OFFERS_BATCH_SIZE):
+            chunk = unique_ids[start : start + self.OFFERS_BATCH_SIZE]
+            variables = {"country": self.country, "ids": chunk}
+            data = self._make_request(OFFERS_NODES_QUERY, variables)
+
+            for node in data.get("nodes", []) or []:
+                if not node:
+                    continue
+                node_id = node.get("id")
+                matching: List[Offer] = []
+                for offer_data in node.get("offers", []) or []:
+                    package = offer_data.get("package", {})
+                    technical_name = package.get("technicalName", "")
+                    monetization_type = offer_data.get("monetizationType", "")
+
+                    # Same filtering as get_offers: subscription offers on the
+                    # configured providers only.
+                    if providers and technical_name not in providers:
+                        continue
+                    if monetization_type != "FLATRATE":
+                        continue
+
+                    matching.append(
+                        Offer(
+                            provider_id=package.get("packageId", 0),
+                            provider_short_name=package.get("shortName", ""),
+                            monetization_type=monetization_type,
+                            presentation_type=offer_data.get("presentationType", "SD"),
+                        )
+                    )
+                if node_id:
+                    offers_by_id[node_id] = matching
+
+        return offers_by_id
 
     def check_availability(
         self,

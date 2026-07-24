@@ -213,6 +213,27 @@ def filter_by_excluded_tags(
     return filtered_items
 
 
+def _prewarm_streaming(streaming_checker, items: List[Dict[str, Any]], media_type: str) -> None:
+    """
+    Batch-populate the streaming availability cache for a list of items.
+
+    Collects the items whose availability isn't known yet and hands them to the
+    checker's batched prewarm, turning ~2 requests-per-title into a handful of
+    batched requests. Safe no-op if there's nothing to fetch.
+    """
+    entries = [
+        {
+            "title": item.get("title", ""),
+            "year": item.get("year"),
+            "id": item.get("imdb_id") if media_type == "movie" else item.get("tvdb_id"),
+        }
+        for item in items
+        if item.get("streaming_available") is None
+    ]
+    if entries:
+        streaming_checker.prewarm(entries, media_type)
+
+
 def apply_streaming_filter(
     items: List[Dict[str, Any]],
     on_streaming: bool,
@@ -265,6 +286,9 @@ def apply_streaming_filter(
         cache_manager=cache_manager,
         logger=logger,
     )
+
+    # Batch-populate the cache first so the per-item checks below are cache hits.
+    _prewarm_streaming(streaming_checker, items, media_type)
 
     streaming_filtered = []
     for item in items:
@@ -325,6 +349,9 @@ def populate_streaming_data(
         cache_manager=cache_manager,
         logger=logger,
     )
+
+    # Batch-populate the cache first so the per-item checks below are cache hits.
+    _prewarm_streaming(streaming_checker, items, media_type)
 
     for item in items:
         # Check if already populated

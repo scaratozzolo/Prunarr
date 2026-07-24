@@ -152,6 +152,76 @@ class StreamingChecker:
 
         return result
 
+    def prewarm(self, entries: list[Dict[str, Any]], media_type: str) -> int:
+        """
+        Batch-populate the streaming availability cache for many items at once.
+
+        Uses JustWatch GraphQL batching (aliased search + ``nodes(ids:)`` offers)
+        to check a whole list in a handful of requests instead of two requests
+        per title. Writes the same boolean cache keys that
+        :meth:`check_movie_availability` / :meth:`check_series_availability` read,
+        so afterwards the normal per-item lookups are pure cache hits.
+
+        Args:
+            entries: List of dicts with ``title``, ``year`` and ``id`` (the IMDB
+                id for movies, the TVDB id for series).
+            media_type: ``"movie"`` or ``"series"``/``"show"``.
+
+        Returns:
+            Number of items whose availability was resolved and cached.
+        """
+        if not self.cache_manager:
+            return 0
+
+        is_movie = media_type.lower() == "movie"
+        content_type = "MOVIE" if is_movie else "SHOW"
+        prefix = "streaming_movie_" if is_movie else "streaming_series_"
+
+        # Keep only items with an id that aren't already cached (dedup by id).
+        todo = []
+        seen_ids = set()
+        for entry in entries:
+            entry_id = entry.get("id")
+            if not entry_id or entry_id in seen_ids:
+                continue
+            if self.cache_manager.get(f"{prefix}{entry_id}") is not None:
+                continue
+            seen_ids.add(entry_id)
+            todo.append(entry)
+
+        if not todo:
+            return 0
+
+        if self.logger:
+            self.logger.debug(
+                f"Prewarming streaming cache for {len(todo)} {media_type} item(s) via batched requests"
+            )
+
+        # Stage 1: batched search -> JustWatch id per item.
+        queries = [(entry.get("title", ""), entry.get("year")) for entry in todo]
+        search_results = self.client.search_titles_batch(queries, content_type=content_type)
+
+        id_to_entries: Dict[str, list] = {}
+        for entry, result in zip(todo, search_results):
+            if result and result.id:
+                id_to_entries.setdefault(result.id, []).append(entry)
+            else:
+                # Not found on JustWatch -> not available.
+                self.cache_manager.set(f"{prefix}{entry['id']}", False)
+
+        # Stage 2: batched offers -> availability boolean.
+        justwatch_ids = list(id_to_entries.keys())
+        offers_map = (
+            self.client.get_offers_batch(justwatch_ids, self.providers) if justwatch_ids else {}
+        )
+
+        for justwatch_id, matched_entries in id_to_entries.items():
+            available = bool(offers_map.get(justwatch_id))
+            for entry in matched_entries:
+                self.cache_manager.set(f"{prefix}{entry['id']}", available)
+
+        return len(todo)
+
     def is_on_streaming(self, media_type: str, title: str, **kwargs) -> bool:
         """
         Quick check if content is available on any configured streaming provider.

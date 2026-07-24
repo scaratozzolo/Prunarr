@@ -114,6 +114,30 @@ query GetTitleOffers(
 }
 """
 
+# GraphQL query to get streaming offers for MANY titles in one request.
+# Uses the Relay-style nodes(ids:) root field so a batch of JustWatch node ids
+# can be resolved at once instead of one node(id:) request per title.
+OFFERS_NODES_QUERY = """
+query GetOffersBatch($country: Country!, $ids: [ID!]!) {
+    nodes(ids: $ids) {
+        id
+        ... on MovieOrShowOrSeason {
+            offers(country: $country, platform: WEB) {
+                monetizationType
+                presentationType
+                package {
+                    id
+                    packageId
+                    clearName
+                    shortName
+                    technicalName
+                }
+            }
+        }
+    }
+}
+"""
+
 # GraphQL query to get available providers for a locale
 PROVIDERS_QUERY = """
 query GetProviders($country: Country!) {
