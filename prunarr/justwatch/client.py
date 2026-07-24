@@ -1,6 +1,8 @@
 """JustWatch API client with caching support."""
 
 import json
+import threading
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -21,6 +23,18 @@ class JustWatchClient:
 
     GRAPHQL_URL = "https://apis.justwatch.com/graphql"
     DEFAULT_TIMEOUT = 10
+
+    # Rate-limiting controls. JustWatch (Google Cloud Armor) throttles IPs that
+    # send bursts of requests, returning HTTP 429 or a blanket 403. We space
+    # requests out and back off/retry instead of hammering and aborting the run.
+    MIN_REQUEST_INTERVAL = 1.0  # minimum seconds between consecutive requests
+    MAX_RETRIES = 4  # attempts per request before giving up
+    INITIAL_BACKOFF = 5.0  # seconds; doubled after each throttled attempt
+
+    # Shared across instances/threads so throttling holds globally, including the
+    # parallel (ThreadPoolExecutor) cache-warming path where workers share a client.
+    _last_request_ts = 0.0
+    _throttle_lock = threading.Lock()
 
     def __init__(
         self,
@@ -55,9 +69,28 @@ class JustWatchClient:
                 f"Initialized JustWatch client with locale={locale}, country={self.country}, language={self.language}"
             )
 
+    def _throttle(self) -> None:
+        """Enforce a minimum interval between requests to avoid rate limiting.
+
+        The lock is held across the sleep so concurrent workers (the parallel
+        cache path) queue up and each fires one interval after the previous,
+        rather than racing on the shared timestamp and bursting together.
+        """
+        with JustWatchClient._throttle_lock:
+            elapsed = time.monotonic() - JustWatchClient._last_request_ts
+            wait = self.MIN_REQUEST_INTERVAL - elapsed
+            if wait > 0:
+                time.sleep(wait)
+            JustWatchClient._last_request_ts = time.monotonic()
+
     def _make_request(self, query: str, variables: Dict[str, Any]) -> Dict[str, Any]:
         """
         Make a GraphQL request to JustWatch API.
+
+        Requests are throttled to at least ``MIN_REQUEST_INTERVAL`` apart. A 429
+        or a blanket 403 (how JustWatch's edge signals a throttled/blocked IP) is
+        treated as rate limiting and retried with exponential backoff before
+        raising ``JustWatchRateLimitError``.
 
         Args:
             query: GraphQL query string
@@ -86,46 +119,68 @@ class JustWatchClient:
             "Referer": "https://www.justwatch.com/",
         }
 
-        try:
-            response = requests.post(
-                self.GRAPHQL_URL,
-                json=payload,
-                headers=headers,
-                timeout=self.DEFAULT_TIMEOUT,
-            )
+        backoff = self.INITIAL_BACKOFF
 
-            if response.status_code == 429:
-                raise JustWatchRateLimitError("JustWatch API rate limit exceeded")
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            self._throttle()
 
-            response.raise_for_status()
-            data = response.json()
+            try:
+                response = requests.post(
+                    self.GRAPHQL_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.DEFAULT_TIMEOUT,
+                )
 
-            if "errors" in data:
-                error_msg = data["errors"][0].get("message", "Unknown GraphQL error")
+                # JustWatch throttles an IP with 429, or a blanket 403 from its
+                # edge. Treat both as rate limiting: back off and retry.
+                if response.status_code in (429, 403):
+                    if attempt < self.MAX_RETRIES:
+                        if self.logger:
+                            self.logger.warning(
+                                f"JustWatch rate limited (HTTP {response.status_code}); "
+                                f"retrying in {backoff:.0f}s (attempt {attempt}/{self.MAX_RETRIES})"
+                            )
+                        time.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    raise JustWatchRateLimitError(
+                        f"JustWatch API rate limit exceeded or IP blocked "
+                        f"(HTTP {response.status_code}) after {self.MAX_RETRIES} attempts"
+                    )
+
+                response.raise_for_status()
+                data = response.json()
+
+                if "errors" in data:
+                    error_msg = data["errors"][0].get("message", "Unknown GraphQL error")
+                    if self.logger:
+                        self.logger.error(f"GraphQL errors: {data['errors']}")
+                    raise JustWatchGraphQLError(f"GraphQL error: {error_msg}")
+
                 if self.logger:
-                    self.logger.error(f"GraphQL errors: {data['errors']}")
-                raise JustWatchGraphQLError(f"GraphQL error: {error_msg}")
+                    self.logger.debug("JustWatch GraphQL request successful")
 
-            if self.logger:
-                self.logger.debug("JustWatch GraphQL request successful")
+                return data.get("data", {})
 
-            return data.get("data", {})
+            except requests.exceptions.Timeout:
+                raise JustWatchAPIError("JustWatch API request timed out")
+            except requests.exceptions.RequestException as e:
+                error_detail = str(e)
+                # Try to get response body for debugging 422 errors
+                if hasattr(e, "response") and e.response is not None:
+                    try:
+                        error_body = e.response.text
+                        if self.logger and e.response.status_code == 422:
+                            self.logger.error(f"422 Response body: {error_body}")
+                    except:
+                        pass
+                raise JustWatchAPIError(f"JustWatch API request failed: {error_detail}")
+            except json.JSONDecodeError:
+                raise JustWatchAPIError("Failed to decode JustWatch API response")
 
-        except requests.exceptions.Timeout:
-            raise JustWatchAPIError("JustWatch API request timed out")
-        except requests.exceptions.RequestException as e:
-            error_detail = str(e)
-            # Try to get response body for debugging 422 errors
-            if hasattr(e, "response") and e.response is not None:
-                try:
-                    error_body = e.response.text
-                    if self.logger and e.response.status_code == 422:
-                        self.logger.error(f"422 Response body: {error_body}")
-                except:
-                    pass
-            raise JustWatchAPIError(f"JustWatch API request failed: {error_detail}")
-        except json.JSONDecodeError:
-            raise JustWatchAPIError("Failed to decode JustWatch API response")
+        # Unreachable: the loop always returns or raises above.
+        raise JustWatchAPIError("JustWatch API request failed: exhausted retries")
 
     def search_title(
         self, title: str, release_year: Optional[int] = None, content_type: str = "MOVIE"
