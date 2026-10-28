@@ -49,6 +49,8 @@ class TestMovieHelpers:
         assert lookup["tt1234567"]["most_recent_watch"] == "3000"
         # Alice's most recent watch should be 3000
         assert lookup["tt1234567"]["watchers"]["alice"]["watched_at"] == "3000"
+        # Every completed play counts, including repeats by the same user
+        assert lookup["tt1234567"]["watch_count"] == 3
 
     @patch("prunarr.prunarr.RadarrAPI")
     @patch("prunarr.prunarr.SonarrAPI")

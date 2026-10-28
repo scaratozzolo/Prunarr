@@ -209,6 +209,7 @@ class MovieService:
                 "watched_at": watched_date,
                 "days_since_watched": days_since_watched,
                 "all_watchers": all_watchers,
+                "watch_count": watch_info.get("watch_count", 0),
             }
 
             # Only add streaming_available if we checked

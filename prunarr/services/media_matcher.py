@@ -54,7 +54,11 @@ class MediaMatcher:
                 watch_lookup[imdb_id] = {
                     "watchers": {},
                     "most_recent_watch": watched_at,
+                    "watch_count": 0,
                 }
+
+            # Count every completed play (one Tautulli record == one play)
+            watch_lookup[imdb_id]["watch_count"] += 1
 
             # Track each user's most recent watch of this movie
             if user not in watch_lookup[imdb_id]["watchers"] or int(watched_at) > int(

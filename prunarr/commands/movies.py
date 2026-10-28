@@ -139,6 +139,21 @@ def _meets_filesize_requirement(movie: Dict[str, Any], min_filesize_bytes: Optio
     return movie.get("file_size", 0) >= min_filesize_bytes
 
 
+def _meets_plays_requirement(
+    movie: Dict[str, Any], min_plays: Optional[int], max_plays: Optional[int]
+) -> bool:
+    """Check if movie's total play count is within the requested range (helper)."""
+    if min_plays is None and max_plays is None:
+        return True
+
+    count = movie.get("watch_count", 0)
+    if min_plays is not None and count < min_plays:
+        return False
+    if max_plays is not None and count > max_plays:
+        return False
+    return True
+
+
 def apply_movie_filters(
     movies: List[Dict[str, Any]],
     watched_only: bool = False,
@@ -146,6 +161,8 @@ def apply_movie_filters(
     watched_by_other_only: bool = False,
     days_watched: Optional[int] = None,
     min_filesize_bytes: Optional[int] = None,
+    min_plays: Optional[int] = None,
+    max_plays: Optional[int] = None,
     include_untagged: bool = True,
     remove_mode: bool = False,
 ) -> List[Dict[str, Any]]:
@@ -186,6 +203,9 @@ def apply_movie_filters(
 
         # File size filtering (common to both modes)
         if not _meets_filesize_requirement(movie, min_filesize_bytes):
+            continue
+
+        if not _meets_plays_requirement(movie, min_plays, max_plays):
             continue
 
         filtered_movies.append(movie)
@@ -287,6 +307,12 @@ def list_movies(
     ),
     min_filesize: Optional[str] = typer.Option(
         None, "--min-filesize", help="Minimum file size (e.g., '1GB', '500MB', '2.5GB')"
+    ),
+    min_plays: Optional[int] = typer.Option(
+        None, "--min-plays", help="Show only movies watched at least N times"
+    ),
+    max_plays: Optional[int] = typer.Option(
+        None, "--max-plays", help="Show only movies watched at most N times (0 = never watched)"
     ),
     on_streaming: bool = typer.Option(
         False, "--on-streaming", help="Show ONLY movies available on configured streaming providers"
@@ -417,6 +443,8 @@ def list_movies(
             watched_by_other_only=watched_by_other_only,
             days_watched=days_watched,
             min_filesize_bytes=min_filesize_bytes,
+            min_plays=min_plays,
+            max_plays=max_plays,
             include_untagged=include_untagged,
             remove_mode=False,
         )
@@ -463,6 +491,7 @@ def list_movies(
                         "watch_status": movie.get("watch_status"),
                         "watched_by": movie.get("watched_by"),
                         "days_since_watched": movie.get("days_since_watched"),
+                        "watch_count": movie.get("watch_count", 0),
                         "file_size_bytes": movie.get("file_size", 0),
                         "added": prepare_datetime_for_json(parse_iso_datetime(movie.get("added"))),
                         "most_recent_watch": prepare_datetime_for_json(
@@ -554,6 +583,12 @@ def remove_movies(
     ),
     tag_match_all: bool = typer.Option(
         False, "--tag-match-all", help="Require ALL specified tags instead of ANY"
+    ),
+    min_plays: Optional[int] = typer.Option(
+        None, "--min-plays", help="Remove only movies watched at least N times"
+    ),
+    max_plays: Optional[int] = typer.Option(
+        None, "--max-plays", help="Remove only movies watched at most N times (0 = never watched)"
     ),
     on_streaming: bool = typer.Option(
         False,
@@ -647,6 +682,8 @@ def remove_movies(
         [
             days_watched is not None,
             min_filesize is not None,
+            min_plays is not None,
+            max_plays is not None,
             watched_only,
             unwatched_only,
             watched_by_other_only,
@@ -708,6 +745,8 @@ def remove_movies(
             watched_by_other_only=watched_by_other_only,
             days_watched=days_watched,
             min_filesize_bytes=min_filesize_bytes,
+            min_plays=min_plays,
+            max_plays=max_plays,
             include_untagged=include_untagged,
             remove_mode=False,  # Use regular filtering, not hardcoded remove mode
         )
@@ -937,7 +976,9 @@ def get_movie_details(
                 raise typer.Exit(1)
 
             if len(matches) > 1:
-                console.print(f"[yellow]⚠️  Multiple movies found matching '{identifier}':[/yellow]")
+                console.print(
+                    f"[yellow]⚠️  Multiple movies found matching '{identifier}':[/yellow]"
+                )
                 for i, m in enumerate(matches[:5], 1):
                     console.print(f"  {i}. {m.get('title')} ({m.get('year')}) [ID: {m.get('id')}]")
                 console.print("\n[dim]Please be more specific or use the Radarr ID[/dim]")

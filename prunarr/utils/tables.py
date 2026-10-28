@@ -27,6 +27,7 @@ def create_movies_table(title: str = "Radarr Movies", include_streaming: bool = 
     table.add_column("Watch Status")
     table.add_column("Watched By", style="cyan")
     table.add_column("Days Ago", style="green")
+    table.add_column("Plays", style="green", justify="right")
     table.add_column("File Size", style="magenta")
     if include_streaming:
         table.add_column("Streaming", style="bright_magenta")

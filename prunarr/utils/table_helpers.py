@@ -52,7 +52,7 @@ def format_movie_table_row(movie: Dict[str, Any], include_streaming: bool = Fals
 
     Returns:
         List of formatted strings ready for table.add_row()
-        Order: Title, Year, User, Watch Status, Watched By, Days Ago, File Size, [Streaming], Added
+        Order: Title, Year, User, Tags, Watch Status, Watched By, Days Ago, Plays, File Size, [Streaming], Added
     """
     # Format user display
     user_display = safe_get(movie, "user") or "[dim]Untagged[/dim]"
@@ -74,7 +74,7 @@ def format_movie_table_row(movie: Dict[str, Any], include_streaming: bool = Fals
     added_date = format_date_or_default(parse_iso_datetime(movie.get("added")))
 
     # Build row data (without streaming)
-    # Order: Title, Year, User, Tags, Watch Status, Watched By, Days Ago, File Size
+    # Order: Title, Year, User, Tags, Watch Status, Watched By, Days Ago, Plays, File Size
     row_data = [
         safe_get(movie, "title"),
         safe_get(movie, "year"),
@@ -83,6 +83,7 @@ def format_movie_table_row(movie: Dict[str, Any], include_streaming: bool = Fals
         format_movie_watch_status(movie.get("watch_status", "unknown")),
         watched_by,
         days_ago,
+        str(movie.get("watch_count", 0)),
         format_file_size(movie.get("file_size", 0)),
     ]
 
