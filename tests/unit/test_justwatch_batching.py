@@ -219,3 +219,22 @@ class TestPrewarm:
 
         assert resolved == 0
         assert calls == []
+
+
+class TestPopulateStreamingData:
+    def test_fills_providers_for_items_that_already_have_a_boolean(self, mocker):
+        from prunarr.utils.filters import populate_streaming_data
+
+        calls = []
+        offers_db = {"tmA": [flatrate_offer("netflix")]}
+        mocker.patch(
+            "requests.post", side_effect=build_fake_post({"The Matrix": "tmA"}, offers_db, calls)
+        )
+        settings = mocker.Mock(streaming_locale="en_US", streaming_providers=["netflix"])
+        items = [
+            {"title": "The Matrix", "year": 1999, "imdb_id": "tt1", "streaming_available": True}
+        ]
+
+        populate_streaming_data(items, "movie", settings, FakeCache(), mocker.Mock())
+
+        assert items[0]["streaming_providers"] == ["netflix"]

@@ -217,9 +217,9 @@ def _prewarm_streaming(streaming_checker, items: List[Dict[str, Any]], media_typ
     """
     Batch-populate the streaming availability cache for a list of items.
 
-    Collects the items whose availability isn't known yet and hands them to the
-    checker's batched prewarm, turning ~2 requests-per-title into a handful of
-    batched requests. Safe no-op if there's nothing to fetch.
+    Hands every item to the checker's batched prewarm, turning ~2 requests-per-title
+    into a handful of batched requests. The checker skips items it already has
+    cached, so this is a no-op when everything is warm.
     """
     entries = [
         {
@@ -228,7 +228,6 @@ def _prewarm_streaming(streaming_checker, items: List[Dict[str, Any]], media_typ
             "id": item.get("imdb_id") if media_type == "movie" else item.get("tvdb_id"),
         }
         for item in items
-        if item.get("streaming_available") is None
     ]
     if entries:
         streaming_checker.prewarm(entries, media_type)
