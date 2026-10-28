@@ -206,37 +206,24 @@ def _cache_streaming(prunarr: PrunArr, results: dict, settings: Settings, logger
     with console.status(
         f"[cyan]Checking streaming availability for {len(items_to_cache)} items..."
     ):
+        # Batched: aliased search + nodes(ids:) offers resolves the whole library
+        # in a handful of requests instead of ~2 per title (see justwatch/client.py).
+        movie_entries = [
+            {"title": m.get("title", ""), "year": m.get("year"), "id": m.get("imdbId")}
+            for m in results.get("movies", [])
+        ]
+        series_entries = [
+            {"title": s.get("title", ""), "year": s.get("year"), "id": s.get("tvdbId")}
+            for s in results.get("series", [])
+        ]
+
         cached_items = 0
-
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS_API_HEAVY) as executor:
-            futures = {}
-            for item_type, item in items_to_cache:
-                if item_type == "movie":
-                    future = executor.submit(
-                        streaming_checker.check_movie_availability,
-                        title=item.get("title"),
-                        year=item.get("year"),
-                        imdb_id=item.get("imdbId"),
-                    )
-                else:  # series
-                    future = executor.submit(
-                        streaming_checker.check_series_availability,
-                        title=item.get("title"),
-                        tvdb_id=item.get("tvdbId"),
-                    )
-                futures[future] = (item_type, item)
-
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result is not None:
-                        cached_items += 1
-                except Exception as e:
-                    if debug:
-                        item_type, item = futures[future]
-                        logger.debug(
-                            f"Failed to cache streaming for {item_type} '{item.get('title')}': {str(e)}"
-                        )
+        try:
+            cached_items += streaming_checker.prewarm(movie_entries, "movie")
+            cached_items += streaming_checker.prewarm(series_entries, "series")
+        except Exception as e:
+            if debug:
+                logger.debug(f"Failed to batch-cache streaming availability: {str(e)}")
 
         console.print(f"[green]✓[/green] Cached streaming availability for {cached_items} items")
 
