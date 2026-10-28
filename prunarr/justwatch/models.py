@@ -25,6 +25,9 @@ class Offer(BaseModel):
 
     provider_id: int = Field(description="Provider offering this content")
     provider_short_name: str = Field(description="Provider short name")
+    provider_technical_name: Optional[str] = Field(
+        default=None, description="Provider technical name (e.g., 'netflix')"
+    )
     monetization_type: str = Field(description="Type of offer (FLATRATE, RENT, BUY, ADS, FREE)")
     presentation_type: str = Field(default="SD", description="Quality (SD, HD, 4K, etc.)")
     url: Optional[str] = Field(default=None, description="Direct URL to content")

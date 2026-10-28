@@ -176,15 +176,16 @@ class StreamingChecker:
         is_movie = media_type.lower() == "movie"
         content_type = "MOVIE" if is_movie else "SHOW"
         prefix = "streaming_movie_" if is_movie else "streaming_series_"
+        providers_prefix = self._providers_prefix(media_type)
 
-        # Keep only items with an id that aren't already cached (dedup by id).
+        # Keyed on the provider list so entries cached before it existed get refetched once.
         todo = []
         seen_ids = set()
         for entry in entries:
             entry_id = entry.get("id")
             if not entry_id or entry_id in seen_ids:
                 continue
-            if self.cache_manager.get(f"{prefix}{entry_id}") is not None:
+            if self.cache_manager.get(f"{providers_prefix}{entry_id}") is not None:
                 continue
             seen_ids.add(entry_id)
             todo.append(entry)
@@ -208,6 +209,7 @@ class StreamingChecker:
             else:
                 # Not found on JustWatch -> not available.
                 self.cache_manager.set(f"{prefix}{entry['id']}", False)
+                self.cache_manager.set(f"{providers_prefix}{entry['id']}", [])
 
         # Stage 2: batched offers -> availability boolean.
         justwatch_ids = list(id_to_entries.keys())
@@ -216,11 +218,32 @@ class StreamingChecker:
         )
 
         for justwatch_id, matched_entries in id_to_entries.items():
-            available = bool(offers_map.get(justwatch_id))
+            offers = offers_map.get(justwatch_id) or []
+            provider_names = sorted(
+                {o.provider_technical_name for o in offers if o.provider_technical_name}
+            )
             for entry in matched_entries:
-                self.cache_manager.set(f"{prefix}{entry['id']}", available)
+                self.cache_manager.set(f"{prefix}{entry['id']}", bool(offers))
+                self.cache_manager.set(f"{providers_prefix}{entry['id']}", provider_names)
 
         return len(todo)
+
+    @staticmethod
+    def _providers_prefix(media_type: str) -> str:
+        if media_type.lower() == "movie":
+            return "streaming_movie_providers_"
+        return "streaming_series_providers_"
+
+    def get_cached_providers(self, media_type: str, item_id: Any) -> Optional[list[str]]:
+        """
+        Configured providers (technical names) that stream an item, from the prewarm cache.
+
+        Returns None when the item hasn't been prewarmed, so callers can tell
+        "unknown" apart from "on none of the configured providers".
+        """
+        if not self.cache_manager or not item_id:
+            return None
+        return self.cache_manager.get(f"{self._providers_prefix(media_type)}{item_id}")
 
     def is_on_streaming(self, media_type: str, title: str, **kwargs) -> bool:
         """

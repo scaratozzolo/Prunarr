@@ -167,6 +167,7 @@ class TestPrewarm:
 
         cache = FakeCache()
         cache.set("streaming_movie_tt4", True)  # pre-cached -> must be skipped
+        cache.set("streaming_movie_providers_tt4", ["netflix"])
         checker = StreamingChecker(locale="en_US", providers=["netflix"], cache_manager=cache)
 
         entries = [
@@ -184,11 +185,34 @@ class TestPrewarm:
         assert cache.store["streaming_movie_tt4"] is True  # untouched
         assert calls == ["search", "offers"]  # one batched request per stage
 
+        assert checker.get_cached_providers("movie", "tt1") == ["netflix"]
+        assert checker.get_cached_providers("movie", "tt2") == []
+        assert checker.get_cached_providers("movie", "tt3") == []
+        assert checker.get_cached_providers("movie", "tt9") is None  # never prewarmed
+
+    def test_refetches_items_cached_without_provider_list(self, mocker):
+        calls = []
+        offers_db = {"tmA": [flatrate_offer("netflix"), flatrate_offer("hulu")]}
+        mocker.patch(
+            "requests.post", side_effect=build_fake_post({"The Matrix": "tmA"}, offers_db, calls)
+        )
+        cache = FakeCache()
+        cache.set("streaming_movie_tt1", True)  # boolean from before provider lists existed
+        checker = StreamingChecker(
+            locale="en_US", providers=["netflix", "hulu"], cache_manager=cache
+        )
+
+        resolved = checker.prewarm([{"title": "The Matrix", "year": 1999, "id": "tt1"}], "movie")
+
+        assert resolved == 1
+        assert checker.get_cached_providers("movie", "tt1") == ["hulu", "netflix"]
+
     def test_noop_when_all_cached(self, mocker):
         calls = []
         mocker.patch("requests.post", side_effect=build_fake_post({}, {}, calls))
         cache = FakeCache()
         cache.set("streaming_movie_tt1", True)
+        cache.set("streaming_movie_providers_tt1", ["netflix"])
         checker = StreamingChecker(locale="en_US", providers=["netflix"], cache_manager=cache)
 
         resolved = checker.prewarm([{"title": "X", "year": 1, "id": "tt1"}], "movie")

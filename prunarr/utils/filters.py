@@ -365,4 +365,7 @@ def populate_streaming_data(
             )
             item["streaming_available"] = is_available
 
+        item_id = item.get("imdb_id") if media_type == "movie" else item.get("tvdb_id")
+        item["streaming_providers"] = streaming_checker.get_cached_providers(media_type, item_id)
+
     return items

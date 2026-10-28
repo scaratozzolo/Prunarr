@@ -331,6 +331,7 @@ class JustWatchClient:
             offer = Offer(
                 provider_id=package.get("packageId", 0),
                 provider_short_name=package.get("shortName", ""),
+                provider_technical_name=technical_name or None,
                 monetization_type=monetization_type,
                 presentation_type=offer_data.get("presentationType", "SD"),
             )
@@ -451,6 +452,7 @@ class JustWatchClient:
                         Offer(
                             provider_id=package.get("packageId", 0),
                             provider_short_name=package.get("shortName", ""),
+                            provider_technical_name=technical_name or None,
                             monetization_type=monetization_type,
                             presentation_type=offer_data.get("presentationType", "SD"),
                         )
