@@ -301,6 +301,32 @@ class TestTautulliAPI:
         mock_request.assert_called_once_with("get_metadata", params={"rating_key": "12345"})
         assert result["title"] == "Test Movie"
 
+    @patch("requests.get")
+    def test_get_metadata_for_removed_item_returns_empty(self, mock_get):
+        """A rating key Plex no longer has (HTTP 400) yields no metadata, not a crash."""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.headers.get.return_value = "application/json"
+        mock_get.return_value = mock_response
+
+        api = TautulliAPI("http://localhost:8181", "test-api-key")
+
+        assert api.get_metadata("13777") == {}
+        assert api.get_imdb_id_from_rating_key("13777") is None
+
+    @patch("requests.get")
+    def test_bad_request_outside_metadata_still_raises(self, mock_get):
+        """Only metadata lookups tolerate HTTP 400; other commands still fail loudly."""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.headers.get.return_value = "application/json"
+        mock_get.return_value = mock_response
+
+        api = TautulliAPI("http://localhost:8181", "test-api-key")
+
+        with pytest.raises(ValueError):
+            api._request("get_history")
+
     @patch.object(TautulliAPI, "get_metadata")
     def test_get_imdb_id_from_rating_key(self, mock_get_metadata):
         """Test extracting IMDb ID from metadata."""

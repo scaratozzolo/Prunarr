@@ -49,7 +49,9 @@ class TestPrunArrLogger:
         logger = PrunArrLogger()
 
         with patch.object(logger, "_get_timestamp", return_value="14:30:45"):
-            formatted = logger._format_message("info", "ℹ️", "blue", "Test message", "Extra details")
+            formatted = logger._format_message(
+                "info", "ℹ️", "blue", "Test message", "Extra details"
+            )
             expected = (
                 "[dim][14:30:45][/dim] - [blue]ℹ️ INFO:[/blue] Test message\n"
                 "[dim]    Extra details[/dim]"

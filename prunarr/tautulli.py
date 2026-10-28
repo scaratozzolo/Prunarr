@@ -23,6 +23,11 @@ import requests
 
 from prunarr.api.base_client import BaseAPIClient
 
+
+class TautulliBadRequestError(ValueError):
+    """Tautulli rejected the request with HTTP 400 (e.g. a rating key Plex no longer has)."""
+
+
 # Compiled regex patterns for efficient ID extraction
 IMDB_ID_PATTERN = re.compile(r"^imdb:\/\/(tt\d+)")
 TVDB_ID_PATTERN = re.compile(r"^tvdb:\/\/(\d+)")
@@ -128,6 +133,9 @@ class TautulliAPI(BaseAPIClient):
                     "Tautulli server not accessible. Check your URL and verify Tautulli is running."
                 )
 
+            if response.status_code == 400:
+                raise TautulliBadRequestError(f"Tautulli rejected {cmd} with HTTP 400")
+
             # Handle non-JSON responses (redirects, HTML pages, etc.)
             content_type = response.headers.get("content-type", "").lower()
             if "application/json" not in content_type:
@@ -154,6 +162,8 @@ class TautulliAPI(BaseAPIClient):
                     raise  # Re-raise Tautulli API errors as-is
                 raise ValueError("Invalid JSON response from Tautulli. Check your configuration.")
 
+        except TautulliBadRequestError:
+            raise
         except requests.exceptions.ConnectionError:
             raise ValueError(
                 "Cannot connect to Tautulli server. Check your URL and network connection."
@@ -506,7 +516,11 @@ class TautulliAPI(BaseAPIClient):
 
     def _fetch_metadata(self, rating_key: str) -> Dict[str, Any]:
         """Internal method to fetch metadata from API."""
-        resp = self._request("get_metadata", params={"rating_key": rating_key})
+        # Watch history outlives the Plex item, so a removed movie's rating key 400s here.
+        try:
+            resp = self._request("get_metadata", params={"rating_key": rating_key})
+        except TautulliBadRequestError:
+            return {}
         return resp.get("data", {})
 
     def get_imdb_id_from_rating_key(self, rating_key: str) -> str | None:
